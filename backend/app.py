@@ -1,181 +1,114 @@
-from flask import Flask, request, jsonify, send_file
+from flask import Flask, request, jsonify
 from flask_cors import CORS
 from .config import Config
 from .ml_engine import MLEngine
 import os
-import io
 
 app = Flask(__name__)
 app.config.from_object(Config)
 CORS(app)
 
-ml_engines = {}
+VALID_MODELS = ['linear_regression', 'xgboost', 'arima', 'lstm']
+VALID_BOND_TYPES = ['3yr', '10yr']
+
+MODEL_TRAIN_MAP = {
+    'linear_regression': 'train_linear_regression',
+    'xgboost':           'train_xgboost',
+    'arima':             'train_arima',
+    'lstm':              'train_lstm',
+}
 
 
-def get_ml_engine(bond_type):
-    if bond_type not in ml_engines:
-        csv_filename = 'p_merged_data_10.csv' if bond_type == '10yr' else 'p_merged_data_3.csv'
-        data_path = os.path.join(os.path.dirname(__file__), '..', csv_filename)
+def make_fresh_engine(bond_type):
+    """
+    Creates a brand new MLEngine every single call.
+    No caching — always loads CSV fresh and re-trains from scratch.
+    """
+    csv_filename = 'p_merged_data_10.csv' if bond_type == '10yr' else 'p_merged_data_3.csv'
+    data_path = os.path.join(os.path.dirname(__file__), '..', csv_filename)
 
-        if not os.path.exists(data_path):
-            raise FileNotFoundError(f"Data file not found: {data_path}")
+    if not os.path.exists(data_path):
+        raise FileNotFoundError(f"Data file not found: {data_path}")
 
-        engine = MLEngine(data_path)
-        engine.load_data(bond_type)
-        ml_engines[bond_type] = engine
-
-    return ml_engines[bond_type]
+    engine = MLEngine(data_path)
+    engine.load_data(bond_type)
+    return engine
 
 
+# ---------------------------------------------------------------------------
+# Health Check
+# ---------------------------------------------------------------------------
 @app.route('/api/health', methods=['GET'])
 def health():
     return jsonify({'status': 'healthy'}), 200
 
 
-@app.route('/api/train', methods=['POST'])
-def train_models():
+# ---------------------------------------------------------------------------
+# /api/compute — Primary endpoint used by the frontend Prediction screen
+#
+# Every call is fully stateless:
+#   1. Loads CSV fresh
+#   2. Trains the requested model
+#   3. Returns metrics + raw chart data (actual vs predicted + dates)
+#   4. Discards everything — nothing stored in memory
+#
+# POST body:
+#   { "model": "linear_regression", "bond_type": "3yr" }
+#
+# Response:
+#   {
+#     "model": "linear_regression",
+#     "bond_type": "3yr",
+#     "metrics": { "mape": 0.011, "mae": 0.08, "mse": 0.007, "r2": 0.77 },
+#     "chart_data": {
+#       "dates":     ["2022-01-01", ...],
+#       "actual":    [98.2, 98.5, ...],
+#       "predicted": [98.1, 98.6, ...]
+#     }
+#   }
+# ---------------------------------------------------------------------------
+@app.route('/api/compute', methods=['POST'])
+def compute():
     try:
-        data = request.json
-        bond_type = data.get('bond_type', '10yr')
+        body = request.json or {}
+        model_name = body.get('model', '').strip()
+        bond_type  = body.get('bond_type', '').strip()
 
-        if bond_type not in ['3yr', '10yr']:
-            return jsonify({'error': 'Invalid bond type'}), 400
+        # --- Validate ---
+        if model_name not in VALID_MODELS:
+            return jsonify({'error': f'Invalid model. Choose one of: {VALID_MODELS}'}), 400
+        if bond_type not in VALID_BOND_TYPES:
+            return jsonify({'error': f'Invalid bond_type. Choose one of: {VALID_BOND_TYPES}'}), 400
 
-        engine = get_ml_engine(bond_type)
+        # --- Fresh engine every time (no cache) ---
+        engine = make_fresh_engine(bond_type)
 
-        results = {}
+        # --- Train the requested model ---
+        train_fn = getattr(engine, MODEL_TRAIN_MAP[model_name])
+        train_fn()
 
-        try:
-            lr_metrics, _ = engine.train_linear_regression()
-            results['linear_regression'] = lr_metrics
-        except Exception as e:
-            results['linear_regression'] = {'error': str(e)}
-
-        try:
-            xgb_metrics, _ = engine.train_xgboost()
-            results['xgboost'] = xgb_metrics
-        except Exception as e:
-            results['xgboost'] = {'error': str(e)}
-
-        try:
-            arima_metrics, _ = engine.train_arima()
-            results['arima'] = arima_metrics
-        except Exception as e:
-            results['arima'] = {'error': str(e)}
-
-        try:
-            lstm_metrics, _ = engine.train_lstm()
-            results['lstm'] = lstm_metrics
-        except Exception as e:
-            results['lstm'] = {'error': str(e)}
-
-        return jsonify({
-            'status': 'success',
-            'bond_type': bond_type,
-            'models_trained': results
-        }), 200
-
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/predictions/<bond_type>/<model_name>', methods=['GET'])
-def get_predictions(bond_type, model_name):
-    try:
-        if bond_type not in ['3yr', '10yr']:
-            return jsonify({'error': 'Invalid bond type'}), 400
-
-        if model_name not in ['linear_regression', 'xgboost', 'arima', 'lstm']:
-            return jsonify({'error': 'Invalid model name'}), 400
-
-        engine = get_ml_engine(bond_type)
-
-        if model_name not in engine.models:
-            return jsonify({'error': f'Model {model_name} not trained yet'}), 400
-
+        # --- Extract results ---
         model_data = engine.models[model_name]
-        metrics = model_data['metrics']
-
-        response = {
-            'bond_type': bond_type,
-            'model': model_name,
-            'metrics': {
-                'mape': round(metrics['mape'], 4),
-                'mae': round(metrics['mae'], 4),
-                'mse': round(metrics['mse'], 4),
-                'r2': round(metrics['r2'], 4)
-            },
-            'predictions': {
-                'actual': model_data['y_test'].tolist(),
-                'predicted': model_data['y_pred'].tolist(),
-                'dates': [str(d) for d in model_data['dates']]
-            }
-        }
-
-        return jsonify(response), 200
-
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/chart/<bond_type>/<model_name>', methods=['GET'])
-def get_chart(bond_type, model_name):
-    try:
-        if bond_type not in ['3yr', '10yr']:
-            return jsonify({'error': 'Invalid bond type'}), 400
-
-        engine = get_ml_engine(bond_type)
-
-        if model_name not in engine.models:
-            return jsonify({'error': f'Model {model_name} not trained yet'}), 400
-
-        chart_data = engine.generate_prediction_chart(model_name, output_format='base64')
+        metrics    = model_data['metrics']
 
         return jsonify({
+            'model':     model_name,
             'bond_type': bond_type,
-            'model': model_name,
-            'chart': chart_data
+            'metrics': {
+                'mape': round(float(metrics['mape']), 6),
+                'mae':  round(float(metrics['mae']),  6),
+                'mse':  round(float(metrics['mse']),  6),
+                'r2':   round(float(metrics['r2']),   6)
+            },
+            'chart_data': {
+                'dates':     [str(d) for d in model_data['dates']],
+                'actual':    model_data['y_test'].tolist(),
+                'predicted': model_data['y_pred'].tolist()
+            }
         }), 200
 
-    except Exception as e:
+    except FileNotFoundError as e:
         return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/export/<bond_type>/<model_name>', methods=['GET'])
-def export_csv(bond_type, model_name):
-    try:
-        if bond_type not in ['3yr', '10yr']:
-            return jsonify({'error': 'Invalid bond type'}), 400
-
-        engine = get_ml_engine(bond_type)
-
-        if model_name not in engine.models:
-            return jsonify({'error': f'Model {model_name} not trained yet'}), 400
-
-        csv_data = engine.export_predictions_csv(model_name)
-
-        return send_file(
-            io.BytesIO(csv_data.encode()),
-            mimetype='text/csv',
-            as_attachment=True,
-            download_name=f'{bond_type}_{model_name}_predictions.csv'
-        ), 200
-
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/summary/<bond_type>', methods=['GET'])
-def get_summary(bond_type):
-    try:
-        if bond_type not in ['3yr', '10yr']:
-            return jsonify({'error': 'Invalid bond type'}), 400
-
-        engine = get_ml_engine(bond_type)
-        summary = engine.get_summary_metrics()
-
-        return jsonify(summary), 200
-
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -188,7 +121,3 @@ def not_found(error):
 @app.errorhandler(500)
 def internal_error(error):
     return jsonify({'error': 'Internal server error'}), 500
-
-
-if __name__ == '__main__':
-    app.run(debug=True, port=5000)

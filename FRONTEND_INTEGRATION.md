@@ -13,401 +13,177 @@ pip install -r requirements.txt
 python run.py
 ```
 
-Backend will run on: `http://localhost:5000`
+Backend will run on: `http://localhost:8000` (Port was changed to 8000 to avoid macOS conflicts).
 
-### Step 2: Configure Frontend API URL
+### Step 2: Configure Frontend API Client
+
+We have simplified the backend to make your frontend exactly one call. 
 
 In your React frontend, create an API client. Add this to your React app:
 
 ```javascript
 // src/api/bondAPI.js
 
-const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000/api';
+const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000/api';
 
 export const bondAPI = {
-  // Train all models
-  trainModels: async (bondType) => {
-    const response = await fetch(`${API_BASE_URL}/train`, {
+  // Primary Endpoint: Trains the model and gets BOTH metrics and chart data in one call
+  compute: async (bondType, modelName) => {
+    const response = await fetch(`${API_BASE_URL}/compute`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ bond_type: bondType })
+      body: JSON.stringify({ 
+        model: modelName,
+        bond_type: bondType 
+      })
     });
-    return response.json();
-  },
-
-  // Get predictions from a model
-  getPredictions: async (bondType, modelName) => {
-    const response = await fetch(
-      `${API_BASE_URL}/predictions/${bondType}/${modelName}`
-    );
-    return response.json();
-  },
-
-  // Get prediction chart as base64 PNG
-  getChart: async (bondType, modelName) => {
-    const response = await fetch(
-      `${API_BASE_URL}/chart/${bondType}/${modelName}`
-    );
-    const data = await response.json();
-    return data.chart; // Returns: "data:image/png;base64,..."
-  },
-
-  // Download predictions as CSV
-  exportCSV: (bondType, modelName) => {
-    window.location.href =
-      `${API_BASE_URL}/export/${bondType}/${modelName}`;
-  },
-
-  // Get all model metrics
-  getSummary: async (bondType) => {
-    const response = await fetch(`${API_BASE_URL}/summary/${bondType}`);
+    
+    if (!response.ok) {
+        throw new Error(`API error: ${response.statusText}`);
+    }
+    
     return response.json();
   }
 };
 ```
 
-### Step 3: Use in React Components
+### Step 3: Use in React Components (Vibe Coding)
 
-#### Example 1: Train Models on Demand
+Here is a complete, copy-pasteable React component using `recharts` to plot the graph and display your metrics.
 
 ```javascript
-import { bondAPI } from './api/bondAPI';
-import { useState } from 'react';
+import React, { useState } from 'react';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+import { bondAPI } from './api/bondAPI'; // Adjust path if needed
 
-function ModelTrainer() {
-  const [isLoading, setIsLoading] = useState(false);
+function PredictionScreen() {
   const [bondType, setBondType] = useState('10yr');
+  const [model, setModel] = useState('xgboost');
+  const [isLoading, setIsLoading] = useState(false);
+  const [data, setData] = useState(null);
+  const [error, setError] = useState(null);
 
-  const handleTrain = async () => {
+  const handleCompute = async () => {
     setIsLoading(true);
+    setError(null);
+    setData(null);
+    
     try {
-      const result = await bondAPI.trainModels(bondType);
-      console.log('Models trained:', result);
-      alert('Models trained successfully!');
-    } catch (error) {
-      console.error('Training failed:', error);
-      alert('Failed to train models');
+      // One call gets everything (Metrics + Chart Data)
+      const result = await bondAPI.compute(bondType, model);
+      
+      // Format the data for Recharts (combining dates, actuals, predicted)
+      const formattedChartData = result.chart_data.dates.map((dateStr, index) => {
+        // You can format the date nicer here if you want
+        const dateObj = new Date(dateStr);
+        return {
+          date: dateObj.toLocaleDateString(),
+          Actual: result.chart_data.actual[index],
+          Predicted: result.chart_data.predicted[index]
+        };
+      });
+
+      setData({
+        metrics: result.metrics,
+        chartData: formattedChartData
+      });
+      
+    } catch (err) {
+      setError(err.message);
     } finally {
       setIsLoading(false);
     }
   };
 
   return (
-    <div>
-      <select value={bondType} onChange={(e) => setBondType(e.target.value)}>
-        <option value="3yr">3-Year Bond</option>
-        <option value="10yr">10-Year Bond</option>
-      </select>
-      <button onClick={handleTrain} disabled={isLoading}>
-        {isLoading ? 'Training...' : 'Train Models'}
-      </button>
-    </div>
-  );
-}
-```
-
-#### Example 2: Display Predictions Chart
-
-```javascript
-import { bondAPI } from './api/bondAPI';
-import { useState, useEffect } from 'react';
-
-function PredictionsChart({ bondType, modelName }) {
-  const [chartImage, setChartImage] = useState(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    const fetchChart = async () => {
-      try {
-        const chart = await bondAPI.getChart(bondType, modelName);
-        setChartImage(chart);
-      } catch (error) {
-        console.error('Failed to fetch chart:', error);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchChart();
-  }, [bondType, modelName]);
-
-  if (loading) return <div>Loading chart...</div>;
-  if (!chartImage) return <div>Failed to load chart</div>;
-
-  return (
-    <div>
-      <h2>{modelName.toUpperCase()}</h2>
-      <img src={chartImage} alt={`${modelName} predictions`} />
-    </div>
-  );
-}
-```
-
-#### Example 3: Display Model Metrics
-
-```javascript
-import { bondAPI } from './api/bondAPI';
-import { useState, useEffect } from 'react';
-
-function ModelMetrics({ bondType }) {
-  const [metrics, setMetrics] = useState(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    const fetchMetrics = async () => {
-      try {
-        const data = await bondAPI.getSummary(bondType);
-        setMetrics(data.model_metrics);
-      } catch (error) {
-        console.error('Failed to fetch metrics:', error);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchMetrics();
-  }, [bondType]);
-
-  if (loading) return <div>Loading metrics...</div>;
-
-  return (
-    <div>
-      <h2>Model Performance ({bondType})</h2>
-      <table>
-        <thead>
-          <tr>
-            <th>Model</th>
-            <th>MAPE</th>
-            <th>MAE</th>
-            <th>MSE</th>
-            <th>R²</th>
-          </tr>
-        </thead>
-        <tbody>
-          {Object.entries(metrics).map(([modelName, m]) => (
-            <tr key={modelName}>
-              <td>{modelName}</td>
-              <td>{m.mape.toFixed(4)}</td>
-              <td>{m.mae.toFixed(4)}</td>
-              <td>{m.mse.toFixed(4)}</td>
-              <td>{m.r2.toFixed(4)}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-```
-
-#### Example 4: Export Predictions
-
-```javascript
-import { bondAPI } from './api/bondAPI';
-
-function ExportButton({ bondType, modelName }) {
-  const handleExport = () => {
-    bondAPI.exportCSV(bondType, modelName);
-  };
-
-  return (
-    <button onClick={handleExport}>
-      Download {modelName} Predictions (CSV)
-    </button>
-  );
-}
-```
-
-#### Example 5: Full Predictions View
-
-```javascript
-import { bondAPI } from './api/bondAPI';
-import { useState, useEffect } from 'react';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
-
-function PredictionsView({ bondType, modelName }) {
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    const fetchData = async () => {
-      try {
-        const result = await bondAPI.getPredictions(bondType, modelName);
-
-        // Format data for Recharts
-        const chartData = result.predictions.dates.map((date, idx) => ({
-          date: new Date(date).toLocaleDateString(),
-          actual: result.predictions.actual[idx],
-          predicted: result.predictions.predicted[idx]
-        }));
-
-        setData({
-          metrics: result.metrics,
-          chart: chartData
-        });
-      } catch (error) {
-        console.error('Failed to fetch predictions:', error);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchData();
-  }, [bondType, modelName]);
-
-  if (loading) return <div>Loading predictions...</div>;
-  if (!data) return <div>Failed to load predictions</div>;
-
-  return (
-    <div>
-      <h2>{modelName.toUpperCase()} Predictions ({bondType})</h2>
-
-      {/* Metrics */}
-      <div style={{ marginBottom: '20px' }}>
-        <h3>Performance Metrics</h3>
-        <p>MAPE: {data.metrics.mape.toFixed(4)}</p>
-        <p>MAE: {data.metrics.mae.toFixed(4)}</p>
-        <p>MSE: {data.metrics.mse.toFixed(4)}</p>
-        <p>R²: {data.metrics.r2.toFixed(4)}</p>
+    <div style={{ padding: '20px', fontFamily: 'sans-serif' }}>
+      <h1>G-Sec Bond Prediction</h1>
+      
+      {/* --- Controls --- */}
+      <div style={{ marginBottom: '20px', display: 'flex', gap: '10px' }}>
+        <select value={bondType} onChange={e => setBondType(e.target.value)} disabled={isLoading}>
+          <option value="3yr">3-Year Bond</option>
+          <option value="10yr">10-Year Bond</option>
+        </select>
+        
+        <select value={model} onChange={e => setModel(e.target.value)} disabled={isLoading}>
+          <option value="xgboost">XGBoost</option>
+          <option value="lstm">LSTM (Deep Learning)</option>
+          <option value="linear_regression">Linear Regression</option>
+          <option value="arima">ARIMA</option>
+        </select>
+        
+        <button onClick={handleCompute} disabled={isLoading}>
+          {isLoading ? 'Computing...' : 'Compute'}
+        </button>
       </div>
 
-      {/* Chart */}
-      <ResponsiveContainer width="100%" height={400}>
-        <LineChart data={data.chart}>
-          <CartesianGrid strokeDasharray="3 3" />
-          <XAxis dataKey="date" />
-          <YAxis />
-          <Tooltip />
-          <Legend />
-          <Line type="monotone" dataKey="actual" stroke="#8884d8" />
-          <Line type="monotone" dataKey="predicted" stroke="#82ca9d" />
-        </LineChart>
-      </ResponsiveContainer>
+      {error && <div style={{ color: 'red' }}>Error: {error}</div>}
+
+      {/* --- Results --- */}
+      {data && (
+        <div>
+          {/* Metrics Panel */}
+          <div style={{ 
+            display: 'flex', gap: '20px', marginBottom: '30px', 
+            padding: '15px', backgroundColor: '#f5f5f5', borderRadius: '8px' 
+          }}>
+            <div><strong>MAPE:</strong> {data.metrics.mape.toFixed(4)}</div>
+            <div><strong>MAE:</strong> {data.metrics.mae.toFixed(4)}</div>
+            <div><strong>MSE:</strong> {data.metrics.mse.toFixed(4)}</div>
+            <div><strong>R²:</strong> {data.metrics.r2.toFixed(4)}</div>
+          </div>
+
+          {/* Interactive Chart */}
+          <div style={{ height: '400px', width: '100%' }}>
+            <ResponsiveContainer>
+              <LineChart data={data.chartData}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="date" />
+                <YAxis domain={['auto', 'auto']} />
+                <Tooltip />
+                <Legend />
+                <Line 
+                  type="monotone" 
+                  dataKey="Actual" 
+                  stroke="#2563eb" 
+                  dot={false}
+                  strokeWidth={2}
+                />
+                <Line 
+                  type="monotone" 
+                  dataKey="Predicted" 
+                  stroke="#ef4444" 
+                  strokeDasharray="5 5" 
+                  dot={false}
+                  strokeWidth={2}
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
-export default PredictionsView;
-```
-
-## Environment Variables
-
-Create a `.env` file in your React app root:
-
-```env
-# Development
-REACT_APP_API_URL=http://localhost:5000/api
-
-# Production (when deployed)
-# REACT_APP_API_URL=https://your-api-domain.com/api
+export default PredictionScreen;
 ```
 
 ## Data Flow
-
+The logic is completely stateless now.
 ```
-Frontend (React)
-    ↓ (HTTP Request)
-Backend API (Flask/Python)
-    ↓ (Load CSV Data)
-ML Engine
-    ↓ (Train/Predict)
-Return JSON/PNG/CSV
+Frontend (React) User clicks Compute
+    ↓ (HTTP POST Request with model and bond_type)
+Backend API
+    ↓ Loads CSV freshly
+    ↓ Runs Machine Learning Algorithm exactly matching your thesis algorithms
+Returns JSON containing 4 Metrics + Raw Line Chart Array
     ↓ (HTTP Response)
-Frontend (Display Results)
+Frontend (Plots graph using Recharts)
 ```
 
-## Typical Usage Flow
-
-1. **User selects bond type** (3yr or 10yr)
-2. **Frontend sends training request** → Backend trains all 4 models
-3. **User selects a model** → Frontend fetches predictions
-4. **Display options:**
-   - Show prediction chart (PNG)
-   - Show metrics table
-   - Show prediction data
-   - Export to CSV
-
-## API Response Examples
-
-### Training Response
-```json
-{
-  "status": "success",
-  "bond_type": "10yr",
-  "models_trained": {
-    "linear_regression": {
-      "mape": 0.0114,
-      "mae": 0.0817,
-      "mse": 0.0077,
-      "r2": 0.7743
-    },
-    "xgboost": {
-      "mape": 0.0013,
-      "mae": 0.0398,
-      "mse": 0.0026,
-      "r2": 0.9938
-    },
-    "arima": {
-      "mape": 0.0362,
-      "mae": 0.2551,
-      "mse": 0.0968,
-      "r2": -1.8212
-    },
-    "lstm": {
-      "mape": 0.0062,
-      "mae": 0.0450,
-      "mse": 0.0035,
-      "r2": 0.8894
-    }
-  }
-}
-```
-
-### Predictions Response
-```json
-{
-  "bond_type": "10yr",
-  "model": "xgboost",
-  "metrics": {
-    "mape": 0.0013,
-    "mae": 0.0398,
-    "mse": 0.0026,
-    "r2": 0.9938
-  },
-  "predictions": {
-    "actual": [102.5, 102.3, 102.1],
-    "predicted": [102.48, 102.28, 102.12],
-    "dates": ["2023-01-01", "2023-01-02", "2023-01-03"]
-  }
-}
-```
-
-## Troubleshooting
-
-### CORS Errors
-- Ensure backend is running on `http://localhost:5000`
-- CORS is already enabled in the backend
-
-### Image Not Loading
-- Chart endpoint returns base64-encoded PNG
-- Use directly in `<img src={chartData} />`
-
-### CSV Export Issues
-- Browser will handle the download automatically
-- Check if pop-ups are blocked
-
-### Slow First Request
-- First request trains all models (takes 30-60 seconds)
-- Subsequent requests are cached and instant
-
-## Next Steps
-
-1. Copy the API client code to your React project
-2. Import and use `bondAPI` in your components
-3. Test with `http://localhost:5000/api/health`
-4. Build your UI around the data
-5. Deploy both frontend and backend together
-
-## Support
-
-Refer to `BACKEND_API_DOCS.md` for detailed API documentation.
+## Important Vibe Coding Notes
+1. **No Caching:** The backend is completely stateless. Every time you hit `Compute`, it trains the model from scratch. This guarantees accurate, live results that match your thesis paper perfectly.
+2. **LSTM Wait Times:** LSTM models are heavy deep-learning algorithms. They will take ~30-60 seconds to resolve. Add a loading spinner on your UI (like the `isLoading` state in the code above) so the user knows it's thinking.
+3. **Recharts dependency:** Make sure your frontend has the charting library installed: `npm install recharts` (or use shadcn ui / tremor).

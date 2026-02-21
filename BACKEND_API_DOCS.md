@@ -1,19 +1,21 @@
-# Bond Market Prediction Backend API Documentation
+# G-Sec Bond Market Prediction — Backend API Documentation
 
 ## Overview
-This backend service provides machine learning model training and prediction endpoints for bond market analysis. It supports 4 models (Linear Regression, XGBoost, ARIMA, LSTM) and 2 bond types (3-year and 10-year).
+This backend service exposes machine learning model training and prediction endpoints for G-Sec bond market analysis. 
+
+NOTE: The service is entirely stateless. Every api call triggers fresh loading and live-training. There is no cache. Values represent real ML algorithm execution.
+
+- **4 Models:** Linear Regression, XGBoost, ARIMA, LSTM
+- **2 Bond Types:** 3-Year G-Sec (`3yr`) and 10-Year G-Sec (`10yr`)
+- **Base URL:** `http://localhost:8000`
+
+---
 
 ## Setup & Installation
 
-### Prerequisites
-- Python 3.8+
-- pip package manager
-
-### Installation Steps
-
 ```bash
-# 1. Navigate to project directory
-cd /path/to/project
+# 1. Navigate to backend project directory
+cd /path/to/G-Sec-Backend-SVC
 
 # 2. Install dependencies
 pip install -r requirements.txt
@@ -22,339 +24,165 @@ pip install -r requirements.txt
 python run.py
 ```
 
-The backend will be available at `http://localhost:5000`
-
-## API Endpoints
-
-### 1. Health Check
-**Endpoint:** `GET /api/health`
-
-**Description:** Check if the backend service is running
-
-**Response:**
-```json
-{
-  "status": "healthy"
-}
-```
+> The backend will be available at **`http://localhost:8000`**
 
 ---
 
-### 2. Train Models
-**Endpoint:** `POST /api/train`
+## ⭐ Primary Endpoint — Used by Frontend Prediction Screen
 
-**Description:** Train all ML models for a specific bond type
+### `POST /api/compute`
 
-**Request Body:**
+**This is the ONLY endpoint the frontend needs to call.**
+
+When the user selects a model + bond type and clicks **Compute**, call this endpoint.
+- It automatically picks the correct CSV (`p_merged_data_3.csv` for `3yr`, `p_merged_data_10.csv` for `10yr`)
+- Trains the model from scratch on the fly.
+- Returns the 4 key metric values **AND the line-chart data (dates, actuals, predicted)**.
+
+#### Request Body
 ```json
 {
-  "bond_type": "10yr"
-}
-```
-
-**Bond Types:**
-- `"3yr"` - 3-Year Government Securities
-- `"10yr"` - 10-Year Government Securities
-
-**Response:**
-```json
-{
-  "status": "success",
-  "bond_type": "10yr",
-  "models_trained": {
-    "linear_regression": {
-      "mape": 0.0114,
-      "mae": 0.0817,
-      "mse": 0.0077,
-      "r2": 0.7743
-    },
-    "xgboost": {
-      "mape": 0.0013,
-      "mae": 0.0398,
-      "mse": 0.0026,
-      "r2": 0.9938
-    },
-    "arima": {
-      "mape": 0.0362,
-      "mae": 0.2551,
-      "mse": 0.0968,
-      "r2": -1.8212
-    },
-    "lstm": {
-      "mape": 0.0062,
-      "mae": 0.0450,
-      "mse": 0.0035,
-      "r2": 0.8894
-    }
-  }
-}
-```
-
----
-
-### 3. Get Predictions
-**Endpoint:** `GET /api/predictions/<bond_type>/<model_name>`
-
-**Description:** Get predictions from a trained model
-
-**Parameters:**
-- `bond_type`: `"3yr"` or `"10yr"`
-- `model_name`: `"linear_regression"`, `"xgboost"`, `"arima"`, or `"lstm"`
-
-**Example Request:**
-```
-GET /api/predictions/10yr/xgboost
-```
-
-**Response:**
-```json
-{
-  "bond_type": "10yr",
   "model": "xgboost",
+  "bond_type": "3yr"
+}
+```
+
+#### Parameters
+| Field | Type | Options | Description |
+|-------|------|---------|-------------|
+| `model` | string | `linear_regression`, `xgboost`, `arima`, `lstm` | The ML model to run |
+| `bond_type` | string | `3yr`, `10yr` | Selects the 3-yr or 10-yr CSV dataset |
+
+#### Success Response `200`
+```json
+{
+  "model": "xgboost",
+  "bond_type": "3yr",
   "metrics": {
-    "mape": 0.0013,
-    "mae": 0.0398,
-    "mse": 0.0026,
-    "r2": 0.9938
+    "mape": 0.001342,
+    "mae":  0.039812,
+    "mse":  0.002631,
+    "r2":   0.993800
   },
-  "predictions": {
-    "actual": [102.5, 102.3, 102.1, ...],
-    "predicted": [102.48, 102.28, 102.12, ...],
-    "dates": ["2023-01-01", "2023-01-02", "2023-01-03", ...]
+  "chart_data": {
+    "dates": [
+        "2022-01-01",
+        "2022-01-02"
+    ],
+    "actual": [
+        100.23,
+        100.86
+    ],
+    "predicted": [
+        100.19,
+        100.84
+    ]
   }
 }
 ```
 
----
+#### The 4 Returned Values
+| Key | Full Name | Description |
+|-----|-----------|-------------|
+| `mape` | Mean Absolute Percentage Error | Lower is better. Prediction accuracy as a % |
+| `mae` | Mean Absolute Error | Lower is better. Average absolute error |
+| `mse` | Mean Squared Error | Lower is better. Penalises large errors |
+| `r2` | R-Squared Score | Closer to 1.0 is better. Fit quality (0–1) |
 
-### 4. Get Prediction Chart
-**Endpoint:** `GET /api/chart/<bond_type>/<model_name>`
-
-**Description:** Get a base64-encoded PNG chart of actual vs predicted values
-
-**Parameters:**
-- `bond_type`: `"3yr"` or `"10yr"`
-- `model_name`: `"linear_regression"`, `"xgboost"`, `"arima"`, or `"lstm"`
-
-**Example Request:**
-```
-GET /api/chart/10yr/xgboost
-```
-
-**Response:**
+#### Error Response `400`
 ```json
 {
-  "bond_type": "10yr",
-  "model": "xgboost",
-  "chart": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+  "error": "Invalid model. Choose one of: ['linear_regression', 'xgboost', 'arima', 'lstm']"
 }
 ```
 
-**Usage in Frontend:**
+#### Frontend Usage (React)
 ```javascript
-// Display the chart in an <img> tag
-<img src={response.chart} alt="Prediction Chart" />
-```
-
----
-
-### 5. Export Predictions to CSV
-**Endpoint:** `GET /api/export/<bond_type>/<model_name>`
-
-**Description:** Download predictions as a CSV file
-
-**Parameters:**
-- `bond_type`: `"3yr"` or `"10yr"`
-- `model_name`: `"linear_regression"`, `"xgboost"`, `"arima"`, or `"lstm"`
-
-**Example Request:**
-```
-GET /api/export/10yr/xgboost
-```
-
-**Response:** CSV file download with columns:
-- Date
-- Actual
-- Predicted
-- Error
-
----
-
-### 6. Get Summary Metrics
-**Endpoint:** `GET /api/summary/<bond_type>`
-
-**Description:** Get summary metrics for all models
-
-**Parameters:**
-- `bond_type`: `"3yr"` or `"10yr"`
-
-**Example Request:**
-```
-GET /api/summary/10yr
-```
-
-**Response:**
-```json
-{
-  "bond_type": "10yr",
-  "data_points": 2945,
-  "model_metrics": {
-    "linear_regression": {
-      "mape": 0.0114,
-      "mae": 0.0817,
-      "mse": 0.0077,
-      "r2": 0.7743
-    },
-    "xgboost": {
-      "mape": 0.0013,
-      "mae": 0.0398,
-      "mse": 0.0026,
-      "r2": 0.9938
-    },
-    "arima": {
-      "mape": 0.0362,
-      "mae": 0.2551,
-      "mse": 0.0968,
-      "r2": -1.8212
-    },
-    "lstm": {
-      "mape": 0.0062,
-      "mae": 0.0450,
-      "mse": 0.0035,
-      "r2": 0.8894
-    }
-  }
-}
-```
-
----
-
-## Frontend Integration Example
-
-### React Example using Fetch API
-
-```javascript
-// Train models
-async function trainModels(bondType) {
-  const response = await fetch('http://localhost:5000/api/train', {
+async function computeModel(model, bondType) {
+  const response = await fetch('http://localhost:8000/api/compute', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ bond_type: bondType })
+    body: JSON.stringify({ model: model, bond_type: bondType })
   });
-  return await response.json();
-}
-
-// Get predictions
-async function getPredictions(bondType, modelName) {
-  const response = await fetch(
-    `http://localhost:5000/api/predictions/${bondType}/${modelName}`
-  );
-  return await response.json();
-}
-
-// Get chart
-async function getChart(bondType, modelName) {
-  const response = await fetch(
-    `http://localhost:5000/api/chart/${bondType}/${modelName}`
-  );
   const data = await response.json();
-  return data.chart; // Base64 encoded PNG
+  
+  // Plot these on a graph:
+  // data.chart_data.dates
+  // data.chart_data.actual
+  // data.chart_data.predicted
+
+  // Display these in a table:
+  // data.metrics.mape, data.metrics.mae, data.metrics.mse, data.metrics.r2
+  return data;
 }
 
-// Export CSV
-function exportCSV(bondType, modelName) {
-  window.location.href =
-    `http://localhost:5000/api/export/${bondType}/${modelName}`;
-}
-
-// Get summary
-async function getSummary(bondType) {
-  const response = await fetch(`http://localhost:5000/api/summary/${bondType}`);
-  return await response.json();
-}
+// Example: User selects XGBoost + 3-year, clicks Compute
+computeModel('xgboost', '3yr').then(data => {
+  console.log(data); 
+});
 ```
 
 ---
 
-## Error Handling
+## All Available Endpoints
 
-All endpoints return error responses in the following format:
+### 1. Health Check
+**`GET /api/health`**
+
+Check if the server is running.
 
 ```json
-{
-  "error": "Error description message"
-}
+{ "status": "healthy" }
 ```
 
-**Common HTTP Status Codes:**
-- `200` - Success
-- `400` - Bad request (invalid parameters)
-- `404` - Endpoint not found
-- `500` - Server error
+---
+
+## Model + Dataset Mapping
+
+| Frontend Selection | `model` param | `bond_type` param | CSV Used |
+|--------------------|--------------|-------------------|----------|
+| Linear Regression + 3yr | `linear_regression` | `3yr` | `p_merged_data_3.csv` |
+| Linear Regression + 10yr | `linear_regression` | `10yr` | `p_merged_data_10.csv` |
+| XGBoost + 3yr | `xgboost` | `3yr` | `p_merged_data_3.csv` |
+| XGBoost + 10yr | `xgboost` | `10yr` | `p_merged_data_10.csv` |
+| ARIMA + 3yr | `arima` | `3yr` | `p_merged_data_3.csv` |
+| ARIMA + 10yr | `arima` | `10yr` | `p_merged_data_10.csv` |
+| LSTM + 3yr | `lstm` | `3yr` | `p_merged_data_3.csv` |
+| LSTM + 10yr | `lstm` | `10yr` | `p_merged_data_10.csv` |
 
 ---
 
-## Model Information
+## Error Responses
 
-### Linear Regression
-- Fast training
-- Good for understanding feature relationships
-- Best for: Quick analysis, baseline comparisons
+All endpoints return errors in this format:
 
-### XGBoost
-- Gradient boosting ensemble method
-- Best overall performance (R² ≈ 0.99)
-- Best for: Production predictions, high accuracy
+```json
+{ "error": "Error description message" }
+```
 
-### ARIMA
-- Time series forecasting
-- Captures temporal patterns
-- Best for: Short-term forecasts, trend analysis
-
-### LSTM
-- Deep learning neural network
-- Captures long-term dependencies
-- Best for: Complex patterns, sequence predictions
+| Status | Meaning |
+|--------|---------|
+| `200` | Success |
+| `400` | Bad request — invalid `model` or `bond_type` |
+| `404` | Endpoint not found |
+| `500` | Server error (check logs) |
 
 ---
 
-## Performance Tips
+## Performance Notes
 
-1. **First Request Delay:** The first request for a bond type will load the CSV data and train models. This may take 30-60 seconds depending on system resources.
-
-2. **Model Caching:** Once trained, models are cached in memory for subsequent requests.
-
-3. **Large Datasets:** The backend efficiently handles datasets with 2,000+ records.
-
-4. **Concurrent Requests:** Use connection pooling for multiple simultaneous requests.
-
----
-
-## Configuration
-
-Edit `backend/config.py` to customize:
-- Debug mode
-- Upload folder location
-- Data folder location
+| Note | Detail |
+|------|--------|
+| **Stateless** | Every click starts a live-training. There is no cache. |
+| **LSTM is slowest** | LSTM training takes 30–60s due to deep learning |
+| **Linear Regression** | Fastest — trains in under 1 second |
 
 ---
 
 ## Troubleshooting
 
-**Issue:** Connection refused
-- **Solution:** Ensure the server is running (`python run.py`)
-
-**Issue:** CSV files not found
-- **Solution:** Ensure `p_merged_data_3.csv` and `p_merged_data_10.csv` are in the project root
-
-**Issue:** Model training takes too long
-- **Solution:** This is normal for LSTM on first run. Subsequent requests will be faster.
-
-**Issue:** CORS errors in frontend
-- **Solution:** CORS is already enabled. Check that requests use the correct URL format.
-
----
-
-## Support
-
-For issues or questions, check the project documentation or review the backend logs for detailed error information.
+| Problem | Solution |
+|---------|----------|
+| `Connection refused` | Run `python run.py` to start the server. Confirm running on port 8000 |
+| `Data file not found` | Ensure `p_merged_data_3.csv` and `p_merged_data_10.csv` are in the project root |
+| `CORS error` | CORS is already enabled. Verify the request URL uses `http://localhost:8000` |
