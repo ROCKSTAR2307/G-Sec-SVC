@@ -1,7 +1,6 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from .config import Config
-from .ml_engine import MLEngine
 import os
 import threading
 import pandas as pd
@@ -64,6 +63,8 @@ def get_engine(bond_type, model_name):
         if not os.path.exists(path):
             raise FileNotFoundError(f"Data file not found: {path}")
 
+        # Lazy import keeps startup fast so the server can bind PORT early.
+        from .ml_engine import MLEngine
         engine = MLEngine(path)
         engine.load_data(bond_type)
         train_fn = getattr(engine, MODEL_TRAIN_MAP[model_name])
@@ -94,17 +95,17 @@ def warm_all_models():
 
 
 def _ensure_startup_warm():
-    """Warm all models once, before serving requests in this worker."""
+    """Start one background warm-up pass once per worker."""
     global _startup_warm_started
     with _cache_lock:
         if _startup_warm_started:
             return
         _startup_warm_started = True
 
-    warm_all_models()
+    threading.Thread(target=warm_all_models, daemon=True).start()
 
 
-# Pre-train all models as soon as this worker imports the app module.
+# Trigger warm-up as soon as this worker imports the app module.
 _ensure_startup_warm()
 
 
